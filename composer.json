@@ -1,6 +1,6 @@
 {
 
-    "name": "oat-sa/extension-tao-outcomeui",
+    "name": "openthinklabs/extension-tao-outcomeui",
     "description" : "extension to display the outcomes",
     "type" : "tao-extension",
     "authors" : [
