@@ -162,10 +162,6 @@ class SingleDeliveryResultsExporter implements ResultsExporterInterface
                 );
             }
 
-            // Needed by the filter to filter by start and end date
-            // filtering will be done as a post-processing
-            $columns = array_merge($columns, $this->columnsProvider->getDeliveryExecutionColumns());
-
             // build column objects
             $this->builtColumns = $this->buildColumns($columns);
         }
@@ -356,7 +352,7 @@ class SingleDeliveryResultsExporter implements ResultsExporterInterface
      */
     protected function getExportData($exporter)
     {
-        return $exporter->export(true, false);
+        return $exporter->export(true, false, ',', '"', false);
     }
 
     /**
