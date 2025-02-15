@@ -13,7 +13,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (c) 2014-2019 (original work) Open Assessment Technologies SA;
+ * Copyright (c) 2014-2022 (original work) Open Assessment Technologies SA;
  */
 
 /**
@@ -121,11 +121,7 @@ define([
                 }).done(function (response) {
                     if (response && response.columns) {
                         if (action === 'remove') {
-                            columns = _.reject(columns, function (col) {
-                                return _.find(response.columns, function (resCol) {
-                                    return _.isEqual(col, resCol);
-                                });
-                            });
+                            columns = columns.filter(col => !response.columns.some(resCol => _.isEqual(col, resCol)));
                         } else {
                             if (typeof response.first !== 'undefined' && response.first === true) {
                                 columns = response.columns.concat(columns);
@@ -134,7 +130,7 @@ define([
                             }
                         }
                     }
-                    if (_.isFunction(done)) {
+                    if (typeof done === 'function') {
                         done();
                     }
                 }).always(function () {
@@ -151,8 +147,12 @@ define([
 
                 //set up model from columns
                 _.forEach(columns, function (col) {
+                    var colId = col.prop ? (col.prop + '_' + col.contextType) : (col.contextId + '_' + col.variableIdentifier);
+                    if (col.columnId) {
+                        colId = col.columnId;
+                    }
                     model.push({
-                        id: col.prop ? (col.prop + '_' + col.contextType) : (col.contextId + '_' + col.variableIdentifier),
+                        id: colId,
                         label: col.label,
                         sortable: false
                     });
@@ -164,7 +164,7 @@ define([
                     .data('ui.datatable', null)
                     .off('load.datatable')
                     .on('load.datatable', function () {
-                        if (_.isFunction(done)) {
+                        if (typeof done === 'function') {
                             done();
                             done = '';
                         }

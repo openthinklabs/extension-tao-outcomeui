@@ -15,7 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (c) 2013-2017 Open Assessment Technologies S.A.
+ * Copyright (c) 2013-2022 Open Assessment Technologies S.A.
  *
  *
  * @access  public
@@ -27,6 +27,7 @@ namespace oat\taoOutcomeUi\model;
 
 use common_Exception;
 use common_exception_Error;
+use common_exception_NoContent;
 use common_Logger;
 use core_kernel_classes_Resource;
 use League\Flysystem\FileNotFoundException;
@@ -45,6 +46,9 @@ use oat\taoDelivery\model\RuntimeService;
 use oat\taoDeliveryRdf\model\DeliveryAssemblyService;
 use oat\taoItems\model\ItemCompilerIndex;
 use oat\taoOutcomeUi\helper\Datatypes;
+use oat\taoOutcomeUi\model\table\ColumnDataProvider\ColumnId\VariableColumnIdProvider;
+use oat\taoOutcomeUi\model\table\ColumnDataProvider\ColumnIdProvider;
+use oat\taoOutcomeUi\model\table\ColumnDataProvider\ColumnLabelProvider;
 use oat\taoOutcomeUi\model\table\ContextTypePropertyColumn;
 use oat\taoOutcomeUi\model\table\GradeColumn;
 use oat\taoOutcomeUi\model\table\ResponseColumn;
@@ -52,6 +56,7 @@ use oat\taoOutcomeUi\model\table\TestCenterColumn;
 use oat\taoOutcomeUi\model\table\TraceVariableColumn;
 use oat\taoOutcomeUi\model\table\VariableColumn;
 use oat\taoOutcomeUi\model\Wrapper\ResultServiceWrapper;
+use oat\taoQtiTest\models\DeliveryItemTypeService;
 use oat\taoQtiTest\models\QtiTestCompilerIndex;
 use oat\taoResultServer\models\classes\NoResultStorage;
 use oat\taoResultServer\models\classes\NoResultStorageException;
@@ -91,6 +96,12 @@ class ResultsService extends OntologyClassService
     public const OPTION_ALLOW_TRACE_VARIABLES_EXPORT = 'allow_trace_variable_export';
 
     public const SEPARATOR = ' | ';
+
+    private const WANTED_TYPES = [
+        \taoResultServer_models_classes_ResponseVariable::class,
+        \taoResultServer_models_classes_OutcomeVariable::class,
+        \taoResultServer_models_classes_TraceVariable::class
+    ];
 
     /** @var taoResultServer_models_classes_ReadableResultStorage */
     private $implementation;
@@ -294,7 +305,7 @@ class ResultsService extends OntologyClassService
      * @return array
      * @throws common_exception_Error
      */
-    public function getVariablesFromObjectResult($itemResult, $wantedTypes = [\taoResultServer_models_classes_ResponseVariable::class, \taoResultServer_models_classes_OutcomeVariable::class, \taoResultServer_models_classes_TraceVariable::class])
+    public function getVariablesFromObjectResult($itemResult, $wantedTypes = self::WANTED_TYPES)
     {
         $returnedVariables = [];
         $variables = $this->getImplementation()->getVariables($itemResult);
@@ -334,9 +345,10 @@ class ResultsService extends OntologyClassService
      */
     public function getDeliveryItemType($resultIdentifier)
     {
-        $resultsViewerService = $this->getServiceLocator()->get(ResultsViewerService::SERVICE_ID);
+        /** @var DeliveryItemTypeService $deliveryItemTypeService */
+        $deliveryItemTypeService = $this->getServiceLocator()->get(DeliveryItemTypeService::SERVICE_ID);
 
-        return $resultsViewerService->getDeliveryItemType($resultIdentifier);
+        return $deliveryItemTypeService->getDeliveryItemType($resultIdentifier);
     }
 
     /**
@@ -374,8 +386,6 @@ class ResultsService extends OntologyClassService
      */
     public function getItemFromItemResult($itemCallId, $itemVariables = [])
     {
-        $item = null;
-
         if (empty($itemVariables)) {
             $itemVariables = $this->getImplementation()->getVariables($itemCallId);
         }
@@ -386,44 +396,16 @@ class ResultsService extends OntologyClassService
         //get the first object
         $itemUri = $tmpItems[0]->item;
 
+        if (!$itemUri) {
+            return null;
+        }
+
         $delivery = $this->getDeliveryByResultId($tmpItems[0]->deliveryResultIdentifier);
 
-        $itemIndexer = $this->getItemIndexer($delivery);
-
-        if (!is_null($itemUri)) {
-            $langItem = $itemIndexer->getItem($itemUri, $this->getResultLanguage());
-            $item = array_merge(is_array($langItem) ? $langItem : [], ['uriResource' => $itemUri]);
-        }
-
-        return $item;
-    }
-
-    /**
-     * @todo temp bugfix for remote deliveries which waiting reworking https://oat-sa.atlassian.net/browse/TR-3111
-     * @throws \common_exception_NotFound
-     * @throws common_exception_Error
-     */
-    public function getItemLabelFromTestItems($itemCallId, array $itemVariables = []): ?string
-    {
-        if (empty($itemVariables)) {
-            $itemVariables = $this->getImplementation()->getVariables($itemCallId);
-        }
-
-        //get the first variable (item are the same in all)
-        $firstItemVariable = reset($itemVariables);
-
-        //get the first object
-        $itemUri = $firstItemVariable[0]->item;
-        $delivery = $this->getDeliveryByResultId($firstItemVariable[0]->deliveryResultIdentifier);
-
-        $deliveryAssemblyService = $this->getServiceLocator()->get(DeliveryAssemblyService::class);
-        $testService = $this->getServiceLocator()->get(TestsService::class);
-
-        $test = $deliveryAssemblyService->getOrigin($delivery);
-        /** @var core_kernel_classes_Resource[] $items */
-        $items = $testService->getTestItems($test);
-
-        return isset($items[$itemUri]) ? $items[$itemUri]->getLabel() : null;
+        return [
+            'uriResource' => $itemUri,
+            'label' => $this->findItemLabel($delivery, $itemUri),
+        ];
     }
 
     /**
@@ -536,30 +518,25 @@ class ResultsService extends OntologyClassService
             $relatedItem = null;
         }
 
-        $itemIdentifier = $undefinedStr;
-
-        if ($relatedItem && isset($relatedItem['uriResource'], $relatedItem['label'])) {
+        if (isset($relatedItem['uriResource'])) {
             $itemIdentifier = $relatedItem['uriResource'];
-
             // check item info in internal cache
             if (isset($this->itemInfoCache[$itemIdentifier])) {
                 common_Logger::t("Item info found in internal cache for item " . $itemIdentifier . "");
 
                 return $this->itemInfoCache[$itemIdentifier];
             }
-            $itemLabel = $relatedItem['label'];
-        } else {
-            $itemLabel = $this->getItemLabelFromTestItems($itemCallId, $itemVariables) ?? $undefinedStr;
         }
 
         $item['itemModel'] = '---';
-        $item['label'] = $itemLabel;
-        $item['uri'] = $itemIdentifier;
+        $item['label'] = $relatedItem['label'] ?? $undefinedStr;
+        $item['uri'] = $relatedItem['uriResource'] ?? $undefinedStr;
+        $item['isLocal'] = strpos($relatedItem['uriResource'] ?? '', LOCAL_NAMESPACE) !== false;
 
         // storing item info in memory to not hit the db for the same item again and again
         // when method "getStructuredVariables" are called multiple times in the same request
         if ($relatedItem) {
-            $this->itemInfoCache[$itemIdentifier] = $item;
+            $this->itemInfoCache[$relatedItem['uriResource']] = $item;
         }
 
         return $item;
@@ -640,14 +617,20 @@ class ResultsService extends OntologyClassService
                 $variable = $itemVariable->variable;
                 $itemCallId = $itemVariable->callIdItem;
                 if ($variable->getIdentifier() == 'numAttempts') {
-                    $variablesByItem[$time] = array_merge($variablesByItem[$time], $this->getItemInfos($itemCallId, [[$itemVariable]]));
+                    $variablesByItem[$time] = array_merge(
+                        $variablesByItem[$time],
+                        $this->getItemInfos($itemCallId, [[$itemVariable]])
+                    );
                     $variablesByItem[$time]['attempt'] = $variable->getValue();
                 }
                 $variableDescription = [
                     'uri' => $itemVariable->uri,
                     'var' => $variable,
                 ];
-                if ($variable instanceof \taoResultServer_models_classes_ResponseVariable && !is_null($variable->getCorrectResponse())) {
+                if (
+                    $variable instanceof \taoResultServer_models_classes_ResponseVariable
+                    && !is_null($variable->getCorrectResponse())
+                ) {
                     $variableDescription['isCorrect'] = $variable->getCorrectResponse() >= 1 ? 'correct' : 'incorrect';
                 } else {
                     $variableDescription['isCorrect'] = 'unscored';
@@ -836,7 +819,10 @@ class ResultsService extends OntologyClassService
                 $variableDescription["uri"] = $variable[0]->uri;
                 $variableDescription["var"] = $variableTemp;
 
-                if (method_exists($variableTemp, 'getCorrectResponse') && !is_null($variableTemp->getCorrectResponse())) {
+                if (
+                    method_exists($variableTemp, 'getCorrectResponse')
+                    && !is_null($variableTemp->getCorrectResponse())
+                ) {
                     if ($variableTemp->getCorrectResponse() >= 1) {
                         $variableDescription["isCorrect"] = "correct";
                     } else {
@@ -846,7 +832,8 @@ class ResultsService extends OntologyClassService
                     $variableDescription["isCorrect"] = "unscored";
                 }
 
-                $variablesByItem[$itemIdentifier]['sortedVars'][$type][$variableIdentifier][$variableTemp->getEpoch()] = $variableDescription;
+                $variablesByItem[$itemIdentifier]['sortedVars'][$type][$variableIdentifier][$variableTemp->getEpoch()]
+                    = $variableDescription;
                 $variablesByItem[$itemIdentifier]['label'] = $itemLabel;
             }
         }
@@ -854,19 +841,26 @@ class ResultsService extends OntologyClassService
         foreach ($variablesByItem as $itemIdentifier => $itemVariables) {
             foreach ($itemVariables['sortedVars'] as $variableType => $variables) {
                 foreach ($variables as $variableIdentifier => $observation) {
-                    uksort($variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier], "self::sortTimeStamps");
+                    uksort(
+                        $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier],
+                        "self::sortTimeStamps"
+                    );
 
                     switch ($filter) {
                         case self::VARIABLES_FILTER_LAST_SUBMITTED:
-                        {
-                            $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier] = [array_pop($variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier])];
+                            $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier] = [
+                                array_pop(
+                                    $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier]
+                                )
+                            ];
                             break;
-                        }
                         case self::VARIABLES_FILTER_FIRST_SUBMITTED:
-                        {
-                            $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier] = [array_shift($variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier])];
+                            $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier] = [
+                                array_shift(
+                                    $variablesByItem[$itemIdentifier]['sortedVars'][$variableType][$variableIdentifier]
+                                )
+                            ];
                             break;
-                        }
                     }
                 }
             }
@@ -908,15 +902,18 @@ class ResultsService extends OntologyClassService
      *
      * @return array
      */
-    public function getVariableDataFromDeliveryResult($resultIdentifier, $wantedTypes = [\taoResultServer_models_classes_ResponseVariable::class, \taoResultServer_models_classes_OutcomeVariable::class, \taoResultServer_models_classes_TraceVariable::class])
+    public function getVariableDataFromDeliveryResult($resultIdentifier, $wantedTypes = self::WANTED_TYPES)
     {
         $testCallIds = $this->getTestsFromDeliveryResult($resultIdentifier);
 
         return $this->extractTestVariables($this->getVariablesFromObjectResult($testCallIds), $wantedTypes);
     }
 
-    public function extractTestVariables(array $variableObjects, array $wantedTypes, string $filter = self::VARIABLES_FILTER_ALL)
-    {
+    public function extractTestVariables(
+        array $variableObjects,
+        array $wantedTypes,
+        string $filter = self::VARIABLES_FILTER_ALL
+    ) {
         $variableObjects = array_filter($variableObjects, static function (array $variableObject) use ($wantedTypes) {
             $variable = current($variableObject);
 
@@ -938,7 +935,13 @@ class ResultsService extends OntologyClassService
             return $a->getCreationTime() - $b->getCreationTime();
         });
 
-        if (in_array($filter, [self::VARIABLES_FILTER_FIRST_SUBMITTED, self::VARIABLES_FILTER_LAST_SUBMITTED], true)) {
+        if (
+            in_array(
+                $filter,
+                [self::VARIABLES_FILTER_FIRST_SUBMITTED, self::VARIABLES_FILTER_LAST_SUBMITTED],
+                true
+            )
+        ) {
             $uniqueVariableIdentifiers = [];
 
             $variableObjects = array_filter($variableObjects, static function (
@@ -1001,7 +1004,6 @@ class ResultsService extends OntologyClassService
 
         switch ($baseType) {
             case "file":
-            {
                 $value = $this->getVariableCandidateResponse($variableUri);
                 common_Logger::i(var_export(strlen($value), true));
                 $decodedFile = Datatypes::decodeFile($value);
@@ -1014,14 +1016,11 @@ class ResultsService extends OntologyClassService
                     "mimetype" => "Content-type: " . $decodedFile["mime"],
                     "filename" => $decodedFile["name"]];
                 break;
-            }
             default:
-            { //legacy files
                 $file = [
                     "data" => $this->getVariableCandidateResponse($variableUri),
                     "mimetype" => "Content-type: text/xml",
                     "filename" => "trace.xml"];
-            }
         }
 
         return $file;
@@ -1098,28 +1097,11 @@ class ResultsService extends OntologyClassService
     {
         return array_reduce($columns, function ($carry, \tao_models_classes_table_Column $column) {
             /** @var ContextTypePropertyColumn|VariableColumn $column */
-            $carry[$this->getColumnId($column)] = $column->getLabel();
+            $columnId = $this->getColumnIdProvider()->provide($column);
+            $carry[$columnId] = $this->getColumnLabelProvider()->provide($column);
 
             return $carry;
         });
-    }
-
-    /**
-     * @param \tao_models_classes_table_Column|ContextTypePropertyColumn|VariableColumn $column
-     *
-     * @return string
-     */
-    private function getColumnId(\tao_models_classes_table_Column $column)
-    {
-        if ($column instanceof ContextTypePropertyColumn) {
-            $id = $column->getProperty()->getUri() . '_' . $column->getContextType();
-        } elseif ($column instanceof TestCenterColumn) {
-            $id = $column->getProperty()->getUri();
-        } else {
-            $id = $column->getContextIdentifier() . '_' . $column->getIdentifier();
-        }
-
-        return $id;
     }
 
     /**
@@ -1130,8 +1112,11 @@ class ResultsService extends OntologyClassService
      * @throws common_Exception
      * @throws common_exception_Error
      */
-    public function getResultsByDelivery(\core_kernel_classes_Resource $delivery, array $storageOptions = [], array $filters = [])
-    {
+    public function getResultsByDelivery(
+        \core_kernel_classes_Resource $delivery,
+        array $storageOptions = [],
+        array $filters = []
+    ) {
         //The list of delivery Results matching the current selection filters
         $this->setImplementation($this->getReadableImplementation($delivery));
 
@@ -1160,8 +1145,14 @@ class ResultsService extends OntologyClassService
      * @throws common_Exception
      * @throws common_exception_Error
      */
-    public function getCellsByResults(array $results, $columns, $filter, array $filters = [], $offset = 0, $limit = null)
-    {
+    public function getCellsByResults(
+        array $results,
+        $columns,
+        $filter,
+        array $filters = [],
+        $offset = 0,
+        $limit = null
+    ) {
         $rows = [];
         $dataProviderMap = $this->collectColumnDataProviderMap($columns);
 
@@ -1188,14 +1179,23 @@ class ResultsService extends OntologyClassService
 
             /** @var ContextTypePropertyColumn|VariableColumn $column */
             foreach ($columns as $column) {
-                $cellKey = $this->getColumnId($column);
-
+                $cellKey = $this->getColumnIdProvider()->provide($column);
                 $cellData[$cellKey] = null;
+                $values = [];
+
                 if ($column instanceof TraceVariableColumn && count($column->getDataProvider()->getCache()) > 0) {
-                    $cellData[$cellKey] = self::filterCellData($column->getDataProvider()->getValue(new core_kernel_classes_Resource($result), $column), self::VARIABLES_FILTER_TRACE);
+                    $cellData[$cellKey] = self::filterCellData(
+                        $column->getDataProvider()->getValue(new core_kernel_classes_Resource($result), $column),
+                        self::VARIABLES_FILTER_TRACE
+                    );
+
+                    continue;
                 } elseif (count($column->getDataProvider()->cache) > 0) {
                     // grade or response column values
-                    $cellData[$cellKey] = self::filterCellData($column->getDataProvider()->getValue(new core_kernel_classes_Resource($result), $column), $filter);
+                    $cellData[$cellKey] = self::filterCellData(
+                        $column->getDataProvider()->getValue(new core_kernel_classes_Resource($result), $column),
+                        $filter
+                    );
 
                     continue;
                 } elseif ($column instanceof ContextTypePropertyColumn) {
@@ -1217,7 +1217,12 @@ class ResultsService extends OntologyClassService
                             $value = (string)$value;
                         }
 
-                        if (in_array($column->getProperty()->getUri(), [DeliveryAssemblyService::PROPERTY_START, DeliveryAssemblyService::PROPERTY_END])) {
+                        if (
+                            in_array(
+                                $column->getProperty()->getUri(),
+                                [DeliveryAssemblyService::PROPERTY_START, DeliveryAssemblyService::PROPERTY_END]
+                            )
+                        ) {
                             $value = tao_helpers_Date::displayeDate($value, tao_helpers_Date::FORMAT_VERBOSE);
                         }
 
@@ -1225,7 +1230,11 @@ class ResultsService extends OntologyClassService
                     }, $values);
 
                     // if it's a guest test taker (it has no property values at all), let's display the uri as label
-                    if ($column->isTestTakerType() && empty($values) && $column->getProperty()->getUri() == OntologyRdfs::RDFS_LABEL) {
+                    if (
+                        $column->isTestTakerType()
+                        && empty($values)
+                        && $column->getProperty()->getUri() == OntologyRdfs::RDFS_LABEL
+                    ) {
                         switch (true) {
                             case $resource instanceof core_kernel_classes_Resource:
                                 $values[] = $resource->getUri();
@@ -1237,7 +1246,6 @@ class ResultsService extends OntologyClassService
                                 throw new \Exception('Invalid type of resource property values.');
                         }
                     }
-
                 } elseif ($column instanceof TestCenterColumn) {
                     $property = $column->getProperty();
                     $testTaker = $this->getTestTaker($result);
@@ -1250,7 +1258,9 @@ class ResultsService extends OntologyClassService
                     }, $values);
                 }
 
-                $cellData[$cellKey] = [self::filterCellData(implode(self::SEPARATOR, array_filter($values)), $filter)];
+                $cellData[$cellKey] = [
+                    self::filterCellData(implode(self::SEPARATOR, array_filter($values)), $filter)
+                ];
             }
             if ($this->filterData($cellData, $filters, $result)) {
                 $this->convertDates($cellData);
@@ -1301,7 +1311,9 @@ class ResultsService extends OntologyClassService
     {
         if (array_key_exists(self::DELIVERY_EXECUTION_STARTED_AT, $data)) {
             $startDate = current($data[self::DELIVERY_EXECUTION_STARTED_AT]);
-            $data[self::DELIVERY_EXECUTION_STARTED_AT][0] = $startDate ? tao_helpers_Date::displayeDate($startDate) : '';
+            $data[self::DELIVERY_EXECUTION_STARTED_AT][0] = $startDate
+                ? tao_helpers_Date::displayeDate($startDate)
+                : '';
         }
 
         if (array_key_exists(self::DELIVERY_EXECUTION_FINISHED_AT, $data)) {
@@ -1338,13 +1350,22 @@ class ResultsService extends OntologyClassService
             $startTime = $startDate ? tao_helpers_Date::getTimeStamp($startDate) : 0;
             $endTime = $endDate ? tao_helpers_Date::getTimeStamp($endDate) : 0;
 
-            if ($matched && array_key_exists(self::FILTER_START_FROM, $filters) && $filters[self::FILTER_START_FROM]) {
+            if (
+                $matched
+                && array_key_exists(self::FILTER_START_FROM, $filters) && $filters[self::FILTER_START_FROM]
+            ) {
                 $matched = $startTime >= $filters[self::FILTER_START_FROM];
             }
-            if ($matched && array_key_exists(self::FILTER_START_TO, $filters) && $filters[self::FILTER_START_TO]) {
+            if (
+                $matched
+                && array_key_exists(self::FILTER_START_TO, $filters) && $filters[self::FILTER_START_TO]
+            ) {
                 $matched = $startTime <= $filters[self::FILTER_START_TO];
             }
-            if ($matched && array_key_exists(self::FILTER_END_FROM, $filters) && $filters[self::FILTER_END_FROM]) {
+            if (
+                $matched
+                && array_key_exists(self::FILTER_END_FROM, $filters) && $filters[self::FILTER_END_FROM]
+            ) {
                 $matched = $endTime >= $filters[self::FILTER_END_FROM];
             }
             if ($matched && array_key_exists(self::FILTER_END_TO, $filters) && $filters[self::FILTER_END_TO]) {
@@ -1397,71 +1418,74 @@ class ResultsService extends OntologyClassService
         //The list of delivery Results matching the current selection filters
         $resultsIds = $this->findResultsByDeliveryAndFilters($delivery, $filters, $storageOptions);
 
-        //retrieveing all individual response variables referring to the  selected delivery results
-        $itemIndex = $this->getItemIndexer($delivery);
-
-        //retrieving The list of the variables identifiers per activities defintions as observed
-        $variableTypes = [];
-
-        $resultLanguage = $this->getResultLanguage();
-
-        foreach (array_chunk($resultsIds, $resultServiceWrapper->getOption(ResultServiceWrapper::RESULT_COLUMNS_CHUNK_SIZE_OPTION)) as $resultsIdsItem) {
+        $columnsType = $variableClassUri === \taoResultServer_models_classes_OutcomeVariable::class
+            ? GradeColumn::class
+            : ResponseColumn::class;
+        foreach (
+            array_chunk(
+                $resultsIds,
+                $resultServiceWrapper->getOption(ResultServiceWrapper::RESULT_COLUMNS_CHUNK_SIZE_OPTION)
+            ) as $resultsIdsItem
+        ) {
             $selectedVariables = $this->getResultsVariables($resultsIdsItem);
             foreach ($selectedVariables as $variable) {
+                $refId = null;
                 $variable = $variable[0];
                 if ($this->isResultVariable($variable, $variableClassUri)) {
                     //variableIdentifier
                     $variableIdentifier = $variable->variable->getIdentifier();
                     if (!is_null($variable->item)) {
                         $uri = $variable->item;
-                        $contextIdentifierLabel = $itemIndex->getItemValue($uri, $resultLanguage, 'label');
+                        if (
+                            !$this->getItemResultStrategy()->isItemEntityBased()
+                            && $variable->callIdItem !== null
+                            && strpos($variable->callIdItem, $variable->deliveryResultIdentifier) !== false
+                        ) {
+                            [$refId, $occurrence] = explode(
+                                '.',
+                                substr($variable->callIdItem, strlen($variable->deliveryResultIdentifier . '.'))
+                            );
+                        }
+                        $contextIdentifierLabel = $this->findItemLabel($delivery, $uri) ?? $uri;
                     } else {
                         $uri = $variable->test;
                         $testData = $this->getTestMetadata($delivery, $variable->test);
-                        $contextIdentifierLabel = $testData->getLabel();
+                        $contextIdentifierLabel = $testData->getLabel() ?? $delivery->getLabel();
                     }
 
                     $columnType = $this->defineTypeColumn($variable->variable);
 
-                    $variableTypes[$uri . $variableIdentifier] = [
+                    $column = \tao_models_classes_table_Column::buildColumnFromArray([
+                        'type' => $columnsType,
                         "contextLabel" => $contextIdentifierLabel,
                         "contextId" => $uri,
+                        'refId' => $refId ?? null,
                         "variableIdentifier" => $variableIdentifier,
                         "columnType" => $columnType
-                    ];
+                    ]);
+                    $columns[$this->getColumnIdProvider()->provide($column)] = $column;
 
-                    if ($variable->variable instanceof \taoResultServer_models_classes_ResponseVariable
-                        && $variable->variable->getCorrectResponse() !== null) {
-                        $variableTypes[$uri . $variableIdentifier . '_is_correct'] = [
+                    if (
+                        $variable->variable instanceof \taoResultServer_models_classes_ResponseVariable
+                        && $variable->variable->getCorrectResponse() !== null
+                    ) {
+                        $columnCorrect = \tao_models_classes_table_Column::buildColumnFromArray([
+                            'type' => $columnsType,
                             "contextLabel" => $contextIdentifierLabel,
                             "contextId" => $uri,
+                            'refId' => $refId ?? null,
                             "variableIdentifier" => $variableIdentifier . '_is_correct',
                             "columnType" => Variable::TYPE_VARIABLE_IDENTIFIER
-                        ];
+                        ]);
+                        $columns[$this->getColumnIdProvider()->provide($columnCorrect)] = $columnCorrect;
                     }
-
                 }
             }
         }
 
-        foreach ($variableTypes as $variableType) {
-            switch ($variableClassUri) {
-                case \taoResultServer_models_classes_OutcomeVariable::class:
-                    $columns[] = new GradeColumn($variableType["contextId"], $variableType["contextLabel"], $variableType["variableIdentifier"], $variableType["columnType"]);
-                    break;
-                case \taoResultServer_models_classes_ResponseVariable::class:
-                    $columns[] = new ResponseColumn($variableType["contextId"], $variableType["contextLabel"], $variableType["variableIdentifier"], $variableType["columnType"]);
-                    break;
-                default:
-                    $columns[] = new ResponseColumn($variableType["contextId"], $variableType["contextLabel"], $variableType["variableIdentifier"], $variableType["columnType"]);
-            }
-        }
-        $arr = [];
-        foreach ($columns as $column) {
-            $arr[] = $column->toArray();
-        }
-
-        return $arr;
+        return array_values(
+            array_map(fn (\tao_models_classes_table_Column $column) => $column->toArray(), $columns)
+        );
     }
 
     /**
@@ -1501,8 +1525,13 @@ class ResultsService extends OntologyClassService
             'duration'
         ];
 
-        if (in_array($variable->getIdentifier(), $stringColumns) ||
-            ($variable instanceof \taoResultServer_models_classes_ResponseVariable && $variable->getCorrectResponse() !== null)) {
+        if (
+            in_array($variable->getIdentifier(), $stringColumns)
+            || (
+                $variable instanceof \taoResultServer_models_classes_ResponseVariable
+                && $variable->getCorrectResponse() !== null
+            )
+        ) {
             return Variable::TYPE_VARIABLE_IDENTIFIER;
         }
 
@@ -1560,6 +1589,28 @@ class ResultsService extends OntologyClassService
         }
 
         return [$value];
+    }
+
+    private function findItemLabel(core_kernel_classes_Resource $delivery, $itemUri)
+    {
+        // item label can be found in ItemCompilerIndex for locally published deliveries
+        try {
+            $itemIndexer = $this->getItemIndexer($delivery);
+
+            return $itemIndexer->getItemValue($itemUri, $this->getResultLanguage(), 'label');
+        } catch (common_exception_NoContent $e) {
+        }
+
+        // in case of a remote delivery, item label might be found from originating test
+        // @TODO local test might have been deleted in the meantime, https://oat-sa.atlassian.net/browse/TR-3111
+        $deliveryAssemblyService = $this->getServiceLocator()->get(DeliveryAssemblyService::class);
+        $testService = $this->getServiceLocator()->get(TestsService::class);
+
+        $test = $deliveryAssemblyService->getOrigin($delivery);
+        /** @var core_kernel_classes_Resource[] $items */
+        $items = $testService->getTestItems($test);
+
+        return isset($items[$itemUri]) ? $items[$itemUri]->getLabel() : null;
     }
 
     /**
@@ -1664,7 +1715,10 @@ class ResultsService extends OntologyClassService
         $resourceMetadataCompiler = $this->getServiceLocator()->get(ResourceJsonMetadataCompiler::SERVICE_ID);
         $metadata = $resourceMetadataCompiler->compile($resource);
 
-        $directory->write(taoQtiTest_models_classes_QtiTestService::TEST_COMPILED_METADATA_FILENAME, json_encode($metadata));
+        $directory->write(
+            taoQtiTest_models_classes_QtiTestService::TEST_COMPILED_METADATA_FILENAME,
+            json_encode($metadata)
+        );
     }
 
     /**
@@ -1773,5 +1827,20 @@ class ResultsService extends OntologyClassService
         }
 
         return $results;
+    }
+
+    private function getColumnIdProvider(): ColumnIdProvider
+    {
+        return $this->getServiceLocator()->getContainer()->get(ColumnIdProvider::class);
+    }
+
+    private function getColumnLabelProvider(): ColumnLabelProvider
+    {
+        return $this->getServiceLocator()->getContainer()->get(ColumnLabelProvider::class);
+    }
+
+    private function getItemResultStrategy(): ItemResultStrategy
+    {
+        return $this->getServiceLocator()->getContainer()->get(ItemResultStrategy::class);
     }
 }

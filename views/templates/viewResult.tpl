@@ -100,7 +100,7 @@ use oat\taoOutcomeUi\model\ResultsService;
                         <b><?= _dh($item['label']) ?></b>
                     </th>
                     <th>
-                        <?php if ($item['uri'] != 'unknown'): ?>
+                        <?php if ($item['isLocal']): ?>
                             <a href="#"
                                 data-delivery-id="<?=get_data('classUri')?>"
                                 data-result-id="<?=get_data('id')?>"
@@ -134,7 +134,13 @@ use oat\taoOutcomeUi\model\ResultsService;
                             <td class="dataResult" colspan="2">
                         <?php
                         if ($variable->getBaseType() === "file" && $variable->getCandidateResponse() !== '') {
-                            echo '<button id="fileDownload" class="download btn-info small" value="'.htmlspecialchars($observation["uri"]).'"><span class="icon-download"></span> '.__('Download file').'</button>';
+                            echo sprintf(
+                                '<button id="fileDownload_%s_%s" class="download btn-info small" value="%s"><span class="icon-download"></span>%s</button>',
+                                $item['internalIdentifier'],
+                                $variableIdentifier,
+                                htmlspecialchars($observation["uri"]),
+                                __('Download file')
+                            );
                         }
                         else{
                             $rdfValue = $variable->getValue();

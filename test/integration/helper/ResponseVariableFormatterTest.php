@@ -23,7 +23,7 @@ namespace oat\taoOutcomeUi\test\unit\helper;
 
 use oat\generis\test\TestCase;
 use oat\taoOutcomeUi\helper\ResponseVariableFormatter;
-use \taoResultServer_models_classes_ResponseVariable as ResponseVariable;
+use taoResultServer_models_classes_ResponseVariable as ResponseVariable;
 
 class ResponseVariableFormatterTest extends TestCase
 {
@@ -71,6 +71,146 @@ class ResponseVariableFormatterTest extends TestCase
         $expected = ['base' => ['identifier' => 'ABC']];
 
         $this->assertEquals($expected, ResponseVariableFormatter::formatVariableToPci($var));
+    }
+
+    public function testFormatStructuredVariablesToItemState()
+    {
+        $result = ResponseVariableFormatter::formatStructuredVariablesToItemState([
+            'key_value_id' => [
+                'itemModel' => '---',
+                'label' => 'Graphing Number Line',
+                'uri' => 'some_uri',
+                'isLocal' => true,
+                'attempt' => '1',
+                'internalIdentifier' => 'item-1',
+                'taoResultServer_models_classes_ResponseVariable' => [
+                    'numAttempts' => [
+                        'uri' => 126,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'numAttempts',
+                            'cardinality' => 'single',
+                            'baseType' => 'integer',
+                            'epoch' => '0.12392600 1666713760',
+                            'type' => 'responseVariable',
+                            'correctResponse' => null,
+                            'candidateResponse' => 'MQ==',
+                        ]),
+                        'isCorrect' => ''
+                    ],
+                    'duration' => [
+                        'uri' => 127,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'duration',
+                            'cardinality' => 'single',
+                            'baseType' => 'duration',
+                            'epoch' => '0.12403000 1666713760',
+                            'type' => 'responseVariable',
+                            'correctResponse' => null,
+                            'candidateResponse' => 'UFQzLjAwMjgwMFM=',
+                        ]),
+                    ],
+                    'RESPONSE' => [
+                        'uri' => 131,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'RESPONSE',
+                            'cardinality' => 'record',
+                            'baseType' => '',
+                            'epoch' => '0.12410600 1666713760',
+                            'type' => 'responseVariable',
+                            'correctResponse' => false,
+                            'candidateResponse' => 'eyJyZWNvcmQiOlt7Im5hbWUiOiJsaW5lVHlwZXMiLCJsaXN0Ijp7InN0cmluZyI6WyJ'
+                                . 'jbG9zZWQtb3BlbiIsIm9wZW4tYXJyb3ciXX19LHsibmFtZSI6InZhbHVlcyIsImJhc2UiOnsic3RyaW5nIjo'
+                                . 'iW1swLDFdLFswLG51bGxdXSJ9fV19',
+                        ])
+                    ],
+                ],
+                'taoResultServer_models_classes_OutcomeVariable' => [
+                    'completionStatus' => [
+                        'uri' => 128,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'completionStatus',
+                            'cardinality' => 'single',
+                            'baseType' => 'identifier',
+                            'epoch' => '0.12405500 1666713760',
+                            'type' => 'outcomeVariable',
+                            'normalMinimum' => null,
+                            'normalMaximum' => null,
+                            'value' => 'Y29tcGxldGVk',
+                        ]),
+                        'isCorrect' => 'unscored',
+                    ],
+                    'SCORE' => [
+                        'uri' => 129,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'SCORE',
+                            'cardinality' => 'single',
+                            'baseType' => 'float',
+                            'epoch' => '0.12407500 1666713760',
+                            'type' => 'outcomeVariable',
+                            'normalMinimum' => null,
+                            'normalMaximum' => null,
+                            'value' => 'MA==',
+                        ]),
+                        'isCorrect' => 'unscored'
+                    ],
+                    'MAXSCORE' => [
+                        'uri' => 130,
+                        'var' => ResponseVariable::fromData([
+                            'identifier' => 'MAXSCORE',
+                            'cardinality' => 'single',
+                            'baseType' => 'float',
+                            'epoch' => '0.12409100 1666713760',
+                            'type' => 'outcomeVariable',
+                            'normalMinimum' => null,
+                            'normalMaximum' => null,
+                            'value' => 'MA==',
+                        ]),
+                        'isCorrect' => 'unscored'
+                    ],
+                ]
+            ]
+        ]);
+
+        self::assertIsArray($result);
+        self::assertEquals([
+            'key_value_id' => [
+                1 => [
+                    'numAttempts' => [
+                        'response' => [
+                            'base' => [
+                                'integer' => 1
+                            ]
+                        ]
+                    ],
+                    'duration' => [
+                        'response' => [
+                            'base' => [
+                                'duration' => 'PT3.002800S'
+                            ]
+                        ]
+                    ],
+                    'RESPONSE' => [
+                        'response' => [
+                            'record' => [
+                                [
+                                    'name' => 'lineTypes',
+                                    'list' => [
+                                        'string' => ['closed-open', 'open-arrow']
+                                    ]
+                                ],
+                                [
+                                    'name' => 'values',
+                                    'base' => [
+                                        'string' => '[[0,1],[0,null]]'
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+
+                ]
+            ]
+        ], $result);
     }
 
     public function testFormatSinglePair()
@@ -138,7 +278,10 @@ class ResponseVariableFormatterTest extends TestCase
         $var = new ResponseVariable();
         $var->setBaseType('string');
         $var->setCardinality('single');
-        $value = " Pablo Ruiz y Picasso, also known as Pablo Picasso (Spanish: [ˈpaβlo piˈkaso]; 25 October 1881 – 8 April 1973), was a Spanish painter, sculptor, printmaker, ceramicist, stage designer, poet and playwright who spent most of his adult life in France. As one of the greatest and most influential artists of the 20th<br /> ";
+        $value = " Pablo Ruiz y Picasso, also known as Pablo Picasso (Spanish: [ˈpaβlo piˈkaso]; 25 October 1881 – 8 "
+            . "April 1973), was a Spanish painter, sculptor, printmaker, ceramicist, stage designer, poet and "
+            . "playwright who spent most of his adult life in France. As one of the greatest and most influential "
+            . "artists of the 20th<br /> ";
         $var->setValue($value);
 
         $expected = ['base' => ['string' => $value]];
@@ -177,7 +320,28 @@ class ResponseVariableFormatterTest extends TestCase
         $var->setCardinality('multiple');
         $var->setValue('[choice_1 choice_3; choice_2 choice_4; choice_1 choice_5; choice_2 choice_6]');
 
-        $expected = ['list' => ['pair' => [['choice_1', 'choice_3'], ['choice_2', 'choice_4'], ['choice_1', 'choice_5'], ['choice_2', 'choice_6']]]];
+        $expected = [
+            'list' => [
+                'pair' => [
+                    [
+                        'choice_1',
+                        'choice_3',
+                    ],
+                    [
+                        'choice_2',
+                        'choice_4',
+                    ],
+                    [
+                        'choice_1',
+                        'choice_5',
+                    ],
+                    [
+                        'choice_2',
+                        'choice_6',
+                    ],
+                ],
+            ],
+        ];
 
         $this->assertEquals($expected, ResponseVariableFormatter::formatVariableToPci($var));
     }
@@ -192,6 +356,5 @@ class ResponseVariableFormatterTest extends TestCase
         $expected = ['list' => ['identifier' => ['\sqrt{4}', '', '\cos', '{1,2}', '\sin', '', '\pi', '[1]', '<']]];
 
         $this->assertEquals($expected, ResponseVariableFormatter::formatVariableToPci($var));
-
     }
 }

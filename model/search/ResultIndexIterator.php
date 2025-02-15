@@ -21,8 +21,8 @@
 namespace oat\taoOutcomeUi\model\search;
 
 use oat\tao\helpers\UserHelper;
+use oat\tao\model\search\index\DocumentBuilder\IndexDocumentBuilderInterface;
 use oat\tao\model\search\index\IndexDocument;
-use oat\tao\model\search\index\IndexService;
 use oat\taoDelivery\model\execution\DeliveryExecutionInterface;
 use oat\taoDelivery\model\execution\ServiceProxy;
 use oat\taoDelivery\model\execution\DeliveryExecution;
@@ -36,7 +36,7 @@ class ResultIndexIterator implements \Iterator
 {
     use ServiceLocatorAwareTrait;
 
-    const CACHE_SIZE = 100;
+    public const CACHE_SIZE = 100;
 
     private $resourceIterator;
 
@@ -92,7 +92,7 @@ class ResultIndexIterator implements \Iterator
      * (non-PHPdoc)
      * @see Iterator::rewind()
      */
-    function rewind()
+    public function rewind()
     {
         if (!$this->unmoved) {
             $this->resourceIterator->rewind();
@@ -105,9 +105,12 @@ class ResultIndexIterator implements \Iterator
      * (non-PHPdoc)
      * @see Iterator::current()
      */
-    function current()
+    public function current()
     {
-        $deliveryExecution = ServiceProxy::singleton()->getDeliveryExecution($this->instanceCache[$this->currentInstance]);
+        $deliveryExecution = ServiceProxy::singleton()->getDeliveryExecution(
+            $this->instanceCache[$this->currentInstance]
+        );
+
         return $this->createDocument($deliveryExecution);
     }
 
@@ -115,7 +118,7 @@ class ResultIndexIterator implements \Iterator
      * (non-PHPdoc)
      * @see Iterator::key()
      */
-    function key()
+    public function key()
     {
         return $this->resourceIterator->key() . '#' . $this->currentInstance;
     }
@@ -124,14 +127,15 @@ class ResultIndexIterator implements \Iterator
      * (non-PHPdoc)
      * @see Iterator::next()
      */
-    function next()
+    public function next()
     {
         $this->unmoved = false;
         if ($this->valid()) {
             $this->currentInstance++;
             if (!isset($this->instanceCache[$this->currentInstance])) {
                 // try to load next block (unless we know it's empty)
-                $remainingInstances = !$this->endOfResource && $this->load($this->resourceIterator->current(), $this->currentInstance);
+                $remainingInstances = !$this->endOfResource
+                    && $this->load($this->resourceIterator->current(), $this->currentInstance);
 
                 // endOfClass or failed loading
                 if (!$remainingInstances) {
@@ -149,7 +153,7 @@ class ResultIndexIterator implements \Iterator
      * (non-PHPdoc)
      * @see Iterator::valid()
      */
-    function valid()
+    public function valid()
     {
         return $this->resourceIterator->valid();
     }
@@ -174,7 +178,9 @@ class ResultIndexIterator implements \Iterator
     protected function ensureValidResult()
     {
         try {
-            $deliveryExecution = ServiceProxy::singleton()->getDeliveryExecution($this->instanceCache[$this->currentInstance]);
+            $deliveryExecution = ServiceProxy::singleton()->getDeliveryExecution(
+                $this->instanceCache[$this->currentInstance]
+            );
             $deliveryExecution->getDelivery();
         } catch (\common_exception_NotFound $e) {
             $message = 'Skip result ' . $deliveryExecution->getIdentifier() . ' with message ' . $e->getMessage();
@@ -248,8 +254,12 @@ class ResultIndexIterator implements \Iterator
             'id' => $execution->getIdentifier(),
             'body' => $body
         ];
-        /** @var IndexService $indexService */
-        $indexService = $this->getServiceLocator()->get(IndexService::SERVICE_ID);
-        return $indexService->createDocumentFromArray($document);
+
+        return $this->getIndexDocumentBuilder()->createDocumentFromArray($document);
+    }
+
+    private function getIndexDocumentBuilder(): IndexDocumentBuilderInterface
+    {
+        return $this->getServiceLocator()->getContainer()->get(IndexDocumentBuilderInterface::class);
     }
 }
